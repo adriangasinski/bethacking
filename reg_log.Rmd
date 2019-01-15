@@ -1,0 +1,157 @@
+---
+title: "Piłka nożna - regresja logistyczna"
+output: html_notebook
+---
+
+Libraries
+```{r}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(ROCR)
+```
+
+
+Load data
+```{r}
+setwd("~/Dysk_Google/datahacking/repos/bethacking")
+load(file="dfm.rdata")
+```
+
+
+# Dealing with correlations 
+```{r}
+df_cor <- dfm[,c(18:73)]
+```
+
+```{r}
+cor <- cor(df_cor)
+```
+
+```{r}
+dissimilarity <- 1 - abs(cor)
+distance <- as.dist(dissimilarity)
+```
+
+```{r fig.height=12, fig.width=10}
+plot(hclust(distance), 
+     main="Dissimilarity = 1 - abs(Correlation)", xlab="")
+```
+
+I choose cutoff equal to 0.8. 
+It gives 11 groups of variables. I will try to choose one representative for each group. 
+
+```{r}
+hc <- hclust(distance)
+```
+
+```{r}
+clusterCut <- cutree(hc, 11)
+```
+
+```{r}
+clusters_df <- data.frame(variable = names(clusterCut), cluster = clusterCut, stringsAsFactors = F)
+row.names(clusters_df) <- NULL
+```
+
+now we need ranking of variables. I will use random forest to generate it. 
+
+```{r}
+library(randomForest)
+set.seed(2018)
+rfm <- randomForest(as.factor(target) ~ ., dfm[,c(18:74)], importance=TRUE)
+```
+
+```{r}
+var_rank <- data.frame(variable = row.names(importance(rfm)), MeanDecreaseGini=importance(rfm)[,4], stringsAsFactors = FALSE)
+row.names(var_rank) <- NULL
+```
+
+join clusters with ranking
+```{r}
+cl_rnk <- merge(clusters_df, var_rank, by="variable")
+cl_rnk <- cl_rnk %>% arrange(cluster)
+```
+
+Choose max decrease gini for every cluster
+```{r}
+cl_rnk <- cl_rnk %>% group_by(cluster) %>% mutate(max_cl_imp = max(MeanDecreaseGini)) %>% ungroup() %>%
+  filter(max_cl_imp == MeanDecreaseGini)
+```
+
+
+# Train / Valid Split
+```{r}
+set.seed(2018)
+train_ind <- sample(seq_len(nrow(dfm)), size = nrow(dfm)/2)
+
+tr <- dfm[train_ind,]
+va <- dfm[-train_ind,]
+
+```
+
+# Logistic Regression Model 
+```{r}
+tr <- tr[,c("target", cl_rnk$variable)]
+va <- va[,c("target", cl_rnk$variable)]
+lrm <- glm(as.factor(target) ~ ., data = tr, family = "binomial")
+summary(lrm)
+```
+
+```{r}
+tr$AC_wgh_a_a_r3 <- NULL
+tr$h_on_target_ratio_h_r3 <- NULL
+tr$lr_prob <- NULL
+tr$lr_forecast <- NULL
+lrm <- glm(as.factor(target) ~ ., data = tr, family = "binomial")
+summary(lrm)
+
+```
+
+Train
+```{r}
+tr$lr_prob <- predict(lrm, newdata=tr, type="response")
+tr$lr_forecast <- as.numeric(tr$lr_prob > .5)
+
+va$lr_prob <- predict(lrm, newdata=va, type="response")
+va$lr_forecast <- as.numeric(va$lr_prob > .5)
+```
+
+
+Confusion Matrix - Train Set
+```{r}
+confusionMatrix(tr$lr_forecast, tr$target, positive = '1')
+```
+
+Confusion Matrix - Validation Set
+```{r}
+confusionMatrix(va$lr_forecast, va$target, positive = '1')
+```
+
+
+Training Set ROC AUC
+```{r}
+library(ROCR)
+pred <- prediction(tr$lr_prob, tr$target)
+perf <- performance(pred, measure = "auc")
+perf@y.values
+```
+
+
+Validation Set ROC AUC
+```{r}
+library(ROCR)
+pred <- prediction(va$lr_prob, va$target)
+perf <- performance(pred, measure = "auc")
+perf@y.values
+```
+
+
+
+Correlation Matrix
+```{r fig.height=5, fig.width=5}
+tr_cor <- tr[,c(2:10)]
+library(corrplot)
+corrplot(cor(tr_cor), order = "hclust", tl.cex=0.5)
+```
+

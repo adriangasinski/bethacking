@@ -1,0 +1,357 @@
+---
+title: "Football - EDA"
+output: html_notebook
+---
+
+# Libraries
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(DBI)
+library(ggplot2)
+library(zoo)
+```
+
+
+# Load data
+```{r}
+con = dbConnect(RSQLite::SQLite(), dbname="football_data_db.sqlite")
+q <- "
+  select *,
+  case
+      when length(date)>8 then substr(date,0,6)|| '/' || substr(date,9,2)
+      else date
+  end as repaired_date
+  from football_data
+  ;
+"
+df <- dbGetQuery(con, q)
+
+dbDisconnect(con)
+rm(con)
+rm(q)
+```
+
+
+Date format
+```{r}
+df$Date <- as.Date(df$repaired_date, format = "%d/%m/%y")
+```
+
+
+Target Variable
+```{r}
+df <- df %>% mutate(target = as.numeric(FTHG>FTAG))
+```
+
+
+
+Filtering out proper observations
+```{r}
+dfm <- df %>% filter(
+  !(Season %in% c("2004/2005", "2003/2004", "2002/2003")), 
+  Country %in% c("Spain", "England", "Italy", "Germany", "Portugal", "France")
+  )
+```
+
+
+
+
+# Counting Variables
+
+## vars on match level
+
+Points
+  - h_points
+  - a_points
+Goals scored
+  - FTHG
+  - FTAG
+Goals conceded
+  - FTAG
+  - FTHG
+Goal balance
+  - h_goal_balance
+  - a_goal_balance
+Corners
+  - HC
+  - AC
+Corners balance
+  - h_c_balance
+  - a_c_balance
+Shots
+  - HS
+  - AS
+Shots balance
+  - h_s_balance
+  - a_s_balance
+Shots on target
+  - HST
+  - AST
+Shots on target balance
+  - h_st_balance
+  - a_st_balance
+On Target Ratio
+  - h_on_target_ratio
+  - a_on_target_ratio
+On Target Ratio Balance
+  - h_on_target_ratio_balance
+  - a_on_target_ratio_balance
+Goal / Shots on target ratio
+  - h_goals_st_ratio
+  - a_goals_st_ratio
+Goal / Shots on target ratio balance
+  - h_goals_st_ratio_balance
+  - a_goals_st_ratio_balance
+
+  
+Aggregate function - mean
+
+
+h vs a 
+diff
+div
+
+
+### Adding needed variables 
+
+points in match
+```{r}
+dfm <- dfm %>% mutate(
+  h_points = case_when(
+    FTHG > FTAG ~ 3, 
+    FTHG == FTAG ~ 1,
+    TRUE ~ 0), 
+  a_points = case_when(
+    FTHG < FTAG ~ 3, 
+    FTHG == FTAG ~ 1,
+    TRUE ~ 0
+  ),
+  h_goal_balance = FTHG - FTAG, 
+  a_goal_balance = FTAG - FTHG, 
+  h_c_balance = HC - AC,
+  a_c_balance = AC - HC,
+  h_s_balance = HS - AS, 
+  a_s_balance = AS - HS, 
+  h_st_balance = HST - AST, 
+  a_st_balance = AST - HST, 
+  h_on_target_ratio = case_when(HS == 0 ~ 0, TRUE ~ HST/HS), 
+  a_on_target_ratio = case_when(AS == 0 ~ 0, TRUE ~ AST/AS),
+  h_on_target_ratio_balance = h_on_target_ratio - a_on_target_ratio,
+  a_on_target_ratio_balance = a_on_target_ratio - h_on_target_ratio,
+  h_goals_st_ratio = case_when(HST == 0 ~ 0, TRUE ~ FTHG/HST), 
+  a_goals_st_ratio = case_when(AST == 0 ~ 0, TRUE ~ FTAG/AST),
+  h_goals_st_ratio_balance = h_goals_st_ratio - a_goals_st_ratio,
+  a_goals_st_ratio_balance = a_goals_st_ratio - h_goals_st_ratio
+  
+)
+```
+
+
+### Same but weighted by opponent score
+```{r}
+dfm$prob_H <- 1/dfm$B365H
+dfm$prob_D <- 1/dfm$B365D
+dfm$prob_A <- 1/dfm$B365A
+  
+dfm$margin <- dfm$prob_H + dfm$prob_D + dfm$prob_A - 1
+
+dfm$real_prob_H <- dfm$prob_H / (1 + dfm$margin)
+dfm$real_prob_D <- dfm$prob_D / (1 + dfm$margin)
+dfm$real_prob_A <- dfm$prob_A / (1 + dfm$margin)
+```
+
+
+```{r}
+vars_h <- c(
+  "h_points",
+  "FTHG",
+  "FTAG",
+  "h_goal_balance",
+  "HC",
+  "h_c_balance",
+  "HS",
+  "h_s_balance",
+  "HST",
+  "h_st_balance",
+  "h_on_target_ratio",
+  "h_on_target_ratio_balance",
+  "h_goals_st_ratio",
+  "h_goals_st_ratio_balance"
+)
+
+vars_a <- c(
+  "a_points",
+  "FTAG",
+  "FTHG",
+  "a_goal_balance",
+  "AC",
+  "a_c_balance",
+  "AS",
+  "a_s_balance",
+  "AST",
+  "a_st_balance",
+  "a_on_target_ratio",
+  "a_on_target_ratio_balance",
+  "a_goals_st_ratio",
+  "a_goals_st_ratio_balance"
+)
+```
+
+
+home_team
+```{r}
+dfm <- dfm %>% mutate_at(.vars=vars(vars_h), .funs=funs(wgh_h = . * real_prob_A))
+```
+
+away team
+```{r}
+dfm <- dfm %>% mutate_at(.vars=vars(vars_a), .funs=funs(wgh_a = . * real_prob_H))
+```
+
+
+
+
+# Aggregation
+
+
+## Home and Away number of matches played in a season
+
+h_h_matches
+```{r}
+dfm <- dfm %>% arrange(Date) %>% group_by(Div, Season, HomeTeam) %>%
+  mutate(h_h_matches=rollapply(HomeTeam, width = list(-1:-100), by=1, FUN = function(x){sum(!is.na(x))}, fill = NA, partial=T,align = "right"))
+```
+
+
+a_a_matches
+```{r}
+dfm <- dfm %>% arrange(Date) %>% group_by(Div, Season, AwayTeam) %>%
+  mutate(a_a_matches=rollapply(AwayTeam, width = list(-1:-100), by=1, FUN = function(x){sum(!is.na(x))}, fill = NA, partial=T,align = "right"))
+```
+
+NA <- 0 
+```{r}
+dfm$h_h_matches[is.na(dfm$h_h_matches)] <- 0 
+dfm$a_a_matches[is.na(dfm$a_a_matches)] <- 0
+```
+
+
+## Aggregation of match stats
+
+```{r}
+vars_h_all <- c(vars_h, paste(vars_h, "wgh_h", sep="_"))
+vars_a_all <- c(vars_a, paste(vars_a, "wgh_a", sep="_"))
+```
+
+
+```{r}
+dfm2 <- dfm %>% arrange(Date) %>% 
+  
+  # Home Team Aggregation
+  group_by(Div, Season, HomeTeam) %>%
+  mutate_at(vars(vars_h_all), funs(
+    h_r3 = rollapply(data=., width = list(-1:-3), by=1, FUN = mean, fill = NA, na.rm = T, partial=T, align = "right")
+    )) %>% ungroup() %>%
+  
+  # Away Team Aggrefation
+  arrange(Date) %>%
+  group_by(Div, Season, AwayTeam) %>%
+  mutate_at(vars(vars_a_all), funs(
+    a_r3 = rollapply(data=., width = list(-1:-3), by=1, FUN = mean, fill = NA, na.rm = T, partial=T, align = "right")
+    )) %>% ungroup()
+```
+
+
+
+simple check
+
+```{r}
+pom <- dfm2 %>% filter(HomeTeam == "Arsenal") %>% arrange(Date) %>% select(Div, Date,h_h_matches, HomeTeam, AwayTeam, FTHG, FTAG, h_points, h_points_h_r3)
+```
+
+
+Save df to file
+
+```{r}
+dfm <- dfm2
+rm(dfm2)
+rm(pom)
+```
+
+```{r}
+save(dfm, file="dfm.rdata")
+```
+
+
+
+# Ranking of variables
+```{r}
+library(randomForest)
+```
+
+
+```{r}
+load(file="dfm.rdata")
+```
+
+
+```{r}
+
+dfm2 <- dfm %>% filter(
+  h_h_matches > 2,
+  a_a_matches > 2,
+  !is.na(real_prob_H), 
+  !is.na(target)
+)
+```
+
+```{r}
+dfm2 <- dfm2[,c(156:211,100)]
+```
+
+
+```{r}
+dfm3 <- dfm2[complete.cases(dfm2),]
+```
+
+
+```{r}
+dfm3$target <- as.factor(dfm3$target)
+```
+
+
+
+```{r}
+rfm <- randomForest(target ~ ., data=dfm3, importnace = TRUE)
+```
+
+Dataframe with Importance
+
+```{r}
+imp <- importance(rfm)
+imp_df <- data.frame(variable = rownames(imp), MeanDecreaseGini = imp)
+rownames(imp_df) <- NULL
+colnames(imp_df) <- c("Variable", "MeanDecreaseGini")
+
+imp_df <- imp_df[order(imp_df$MeanDecreaseGini, decreasing = T),]
+```
+
+
+Importance plot
+```{r fig.height=12, fig.width=10}
+library(caret)
+varImpPlot(rfm,type=2)
+```
+
+
+Correlations
+
+```{r fig.height=10, fig.width=10}
+library(corrplot)
+corrplot(cor(dfm3[,1:56]), order = "hclust", tl.cex=0.5)
+```
+
+
+

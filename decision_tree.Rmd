@@ -1,0 +1,219 @@
+---
+title: "Football - Decision tree"
+output: html_notebook
+---
+
+Libraries
+```{r}
+library(ggplot2)
+library(dplyr)
+library(ROCR)
+library(rpart)
+```
+
+Load data
+```{r}
+setwd("~/Dysk_Google/datahacking/repos/bethacking")
+load(file="dfm.rdata")
+```
+
+
+Take only proper columns
+```{r}
+df <- dfm[, c(
+  "Country", 
+  "League", 
+  "Div", 
+  "Season", 
+  "Date", 
+  "HomeTeam",
+  "AwayTeam",
+  "FTHG", 
+  "FTAG", 
+  "real_prob_H",
+  "real_prob_D",
+  "real_prob_A",
+  "B365H",
+  "B365D",
+  "B365A",
+  "h_h_matches",
+  "a_a_matches",
+  colnames(dfm)[156:211],
+  "target"
+)]
+```
+
+
+Filter out observations with NAs
+```{r}
+df <- df[complete.cases(df),]
+```
+
+
+Check what leagues do we have in dataset
+```{r}
+df %>% group_by(Div) %>% summarize(cnt=n())
+```
+But in data from this season every leagu has got data about corners and shots. 
+
+
+
+Now we should get rid of 1st, 2nd and 3rd matches in the season
+```{r}
+df <- df %>% filter(h_h_matches > 2, a_a_matches > 2)
+```
+
+Save to file
+```{r}
+dfm <- df
+rm(df)
+save(dfm, file="dfm.rdata")
+```
+
+
+```{r}
+dfm$target <- as.factor(dfm$target)
+```
+
+
+Train / Validation Set Split
+```{r}
+set.seed(2018)
+train_ind <- sample(seq_len(nrow(dfm)), size = nrow(dfm)/2)
+
+tr <- dfm[train_ind,]
+va <- dfm[-train_ind,]
+
+```
+
+
+
+Decision Tree
+```{r}
+dt <- rpart(target ~ ., data=tr[,c(3,18:74)], method="class")
+```
+
+```{r}
+dt
+```
+
+```{r}
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer)
+fancyRpartPlot(dt)
+```
+
+Scoring
+```{r}
+tr$tree_forecast <- predict(dt, newdata = tr, type = "class")
+tr$tree_forecast_prob <- predict(dt, newdata = tr, type = "prob")[,2]
+va$tree_forecast <- predict(dt, newdata = va, type = "class")
+va$tree_forecast_prob <- predict(dt, newdata = va, type = "prob")[,2]
+```
+
+
+
+Confusion Matrix - Train Set
+```{r}
+library(caret)
+confusionMatrix(tr$tree_forecast, tr$target, positive = '1')
+```
+
+
+Confusion Matrix - Validation Set
+```{r}
+confusionMatrix(va$tree_forecast, va$target, positive = '1')
+
+```
+
+Training Set ROC AUC
+```{r}
+library(ROCR)
+pred <- prediction(tr$tree_forecast_prob, tr$target)
+perf <- performance(pred, measure = "auc")
+perf@y.values
+```
+
+Validation Set ROC AUC
+```{r}
+library(ROCR)
+pred <- prediction(va$tree_forecast_prob, va$target)
+perf <- performance(pred, measure = "auc")
+perf@y.values
+```
+
+
+
+Decision Tree v2
+```{r}
+dt2 <- rpart(target ~ ., data=tr[,c(3,18:74)], method="class", control=rpart.control(cp=0.003))
+dt2
+```
+
+Scoring with tree2
+```{r}
+tr$tree2_forecast <- predict(dt2, newdata = tr, type = "class")
+tr$tree2_forecast_prob <- predict(dt2, newdata = tr, type = "prob")[,2]
+va$tree2_forecast <- predict(dt2, newdata = va, type = "class")
+va$tree2_forecast_prob <- predict(dt2, newdata = va, type = "prob")[,2]
+```
+
+
+
+```{r}
+confusionMatrix(tr$tree2_forecast, tr$target, positive = '1')
+```
+
+```{r}
+confusionMatrix(va$tree2_forecast, va$target, positive = '1')
+```
+
+Training Set ROC AUC
+```{r}
+library(ROCR)
+pred <- prediction(tr$tree2_forecast_prob, tr$target)
+perf <- performance(pred, measure = "auc")
+perf@y.values
+```
+
+Validation Set ROC AUC
+```{r}
+library(ROCR)
+pred <- prediction(va$tree2_forecast_prob, va$target)
+perf <- performance(pred, measure = "auc")
+perf@y.values
+```
+
+
+```{r}
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer)
+fancyRpartPlot(dt2)
+```
+
+Benchmark
+```{r}
+confusionMatrix(as.numeric(tr$real_prob_H>.5), tr$target, positive = '1')
+```
+
+
+
+```{r}
+library(ROCR)
+pred <- prediction(tr$real_prob_H, tr$target)
+perf <- performance(pred, measure = "auc")
+perf@y.values
+```
+
+
+
+
+Financial Check 
+```{r}
+library(treeClust)
+tr$tree2_leaf <- rpart.predict.leaves(dt2, tr, type = "where")
+va$tree2_leaf <- rpart.predict.leaves(dt2, va, type = "where")
+```
+

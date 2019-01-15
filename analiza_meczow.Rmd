@@ -1,0 +1,365 @@
+---
+title: "Piłka nożna - wyzwanie modelarskie"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(DBI)
+library(ggplot2)
+```
+
+```{r}
+con = dbConnect(RSQLite::SQLite(), dbname="football_data_db.sqlite")
+q <- "
+  select *,
+  case
+      when length(date)>8 then substr(date,0,6)|| '/' || substr(date,9,2)
+      else date
+  end as repaired_date
+  from football_data
+  ;
+"
+df <- dbGetQuery(con, q)
+
+dbDisconnect(con)
+```
+
+```{r}
+df$Date <- as.Date(df$repaired_date, format = "%d/%m/%y")
+```
+
+
+Zmienna celu 
+```{r}
+df <- df %>% mutate(target = as.numeric(FTHG>FTAG))
+```
+
+```{r}
+cl <- df %>% group_by(Country, League) %>% summarize(
+  cnt = n(), 
+  avg_target = mean(target, na.rm=T), 
+  nas = sum(is.na(target))
+) %>% arrange(Country, League)
+
+cl
+```
+
+```{r}
+cl$x_label <- paste(cl$Country, cl$League, sep = " - ")
+ggplot(cl, aes(x_label, avg_target)) + 
+  geom_bar(stat="identity", aes(fill=Country)) + coord_flip() + 
+  ggtitle("Jak często wygrywa drużyna gospodarzy?") +
+  ylab("Odsetek meczów") + xlab("Liga") + ylim(c(0,1))
+```
+
+
+
+
+```{r}
+s <- df %>% group_by(Season) %>% summarize(
+  cnt = n(), 
+  avg_target = mean(target, na.rm=T), 
+  nas = sum(is.na(target))
+)
+s
+```
+
+```{r fig.width=12}
+ggplot(s, aes(Season, avg_target)) + 
+  geom_point() + geom_line(aes(group=1)) + 
+  ggtitle("Jak często wygrywa drużyna gospodarzy?") +
+  ylab("Odsetek meczów") + xlab("Sezon") + ylim(c(0,1))
+```
+
+
+
+
+Dodaje kolumne punkty gospodarzy
+```{r}
+
+df <- df %>% mutate(h_points = case_when(
+  FTHG > FTAG ~ 3, 
+  FTHG == FTAG ~ 1,
+  TRUE ~ 0
+))
+```
+
+
+Numer meczu gospodarzy w sezonie
+```{r}
+df <- df %>% arrange(Date) %>% group_by(League, Season, HomeTeam) %>% mutate(
+  h_match_home = 1:n()
+) %>% ungroup()
+```
+
+
+# Benchmark - modele bukmacherów
+
+ile mamy brakow w kursach bukmacherow w kolejnych sezonach
+```{r}
+brak_kursow <- df %>% group_by(Season) %>%
+  summarize(
+    b365h_na = sum(is.na(B365H)) / n(), # bet365
+    bsh_na = sum(is.na(BSH)) / n(), # blue square
+    bwh_na = sum(is.na(BWH)) / n(), # bet and win
+    psh_na = sum(is.na(PSH)) / n(), # pinnacle
+    whh_na = sum(is.na(WHH)) / n(), # william hill
+    bbh_na = sum(is.na(BbAvH)) / n(), # betbrain
+    psch_na = sum(is.na(PSCH)) / n(), # pinnacle closing odds
+    gbh_na = sum(is.na(GBH)) / n(), # gamebookers
+    iwh_na = sum(is.na(IWH)) / n(), # interwetten
+    lbh_na = sum(is.na(LBH)) / n(), # ladbrokes
+    sbh_na = sum(is.na(SBH)) / n(), # sporting bet
+    sjh_na = sum(is.na(SJH)) / n(), # stan james
+    soh_na = sum(is.na(SOH)) / n(), # sporting odds
+    vch_na = sum(is.na(VCH)) / n() # vc bet
+  )
+brak_kursow
+```
+
+```{r}
+write.csv2(brak_kursow, "brak_kursow.csv")
+```
+
+
+Wybor meczow do analizy modeli bukmacherow
+
+```{r}
+
+bukmacherzy  <- c(
+  "B365",
+  "BW", 
+  "PS", 
+  "WH", 
+  "BbAv", 
+  "IW", 
+  "LB",
+  "VC"
+)
+
+kursy_cols <- c(
+  paste(bukmacherzy, "H", sep=""), 
+  paste(bukmacherzy, "D", sep=""), 
+  paste(bukmacherzy, "A", sep="")
+)
+
+info_cols <- c(
+  "Country", 
+  "League", 
+  "Div", 
+  "Season", 
+  "Date", 
+  "HomeTeam", 
+  "AwayTeam",
+  "FTHG", 
+  "FTAG", 
+  "target",
+  "h_points", 
+  "h_match_home"
+)
+
+chosen_cols <- c(info_cols, kursy_cols)
+
+df_bookies <- df %>% select(chosen_cols) %>% filter(Season %in% c("2012/2013", "2013/2014", "2014/2015", "2015/2016", "2016/2017"))
+
+df_bookies <- df_bookies[complete.cases(df_bookies),]
+
+```
+
+
+
+Kursy => prawdopodobienstwo
+
+```{r}
+for (b in bukmacherzy){
+  prob_H <- 1/df_bookies[,paste(b, "H", sep="")]
+  prob_D <- 1/df_bookies[,paste(b, "D", sep="")]
+  prob_A <- 1/df_bookies[,paste(b, "A", sep="")]
+  
+  margin <- prob_H + prob_D + prob_A - 1
+  
+  real_prob_H <- prob_H / (1 + margin)
+  real_prob_D <- prob_D / (1 + margin)
+  real_prob_A <- prob_A / (1 + margin)
+  
+  df_bookies[, paste(b, "H_prob", sep="")] <- real_prob_H
+  df_bookies[, paste(b, "D_prob", sep="")] <- real_prob_D
+  df_bookies[, paste(b, "A_prob", sep="")] <- real_prob_A
+  df_bookies[, paste(b, "_margin", sep="")] <- margin
+}
+
+
+
+```
+
+
+
+Który bukmacher ma najniższą marżę?
+```{r}
+cols <- paste(bukmacherzy, "_margin", sep="")
+
+pom <- df_bookies[,cols]
+
+library(reshape2)
+pom2 <- melt(pom, measure.vars=1:8)
+colnames(pom2) <- c("Bukmacher", "Marza")
+
+pom2$Bukmacher <- sub("_margin", "", pom2$Bukmacher)
+
+```
+
+```{r}
+ggplot(pom2, aes(Bukmacher, Marza)) + geom_boxplot(aes(fill=Bukmacher)) + ylim(0,0.3) + ggtitle("Marże bukmacherów")
+```
+
+```{r}
+pom <- pom2 %>% group_by(Bukmacher) %>% summarize(mediana_marzy = round(median(Marza),4)) %>% arrange(mediana_marzy)
+pom
+```
+
+
+# modele bukmacherów
+
+Prognozy bukmacherów
+```{r}
+for (b in bukmacherzy){
+  cln <- paste(b, "H_prob", sep="")
+  df_bookies[, paste(b, "prog", sep="_")] <- as.numeric(df_bookies[,cln]>=.5)
+}
+```
+
+
+
+## Confusion Matrix
+```{r}
+library(caret)
+```
+
+B365
+```{r}
+confusionMatrix(df_bookies$B365_prog, df_bookies$target, positive = '1')
+```
+
+
+BW
+```{r}
+confusionMatrix(df_bookies$BW_prog, df_bookies$target, positive = '1')
+```
+
+
+PS
+```{r}
+confusionMatrix(df_bookies$PS_prog, df_bookies$target, positive = '1')
+```
+
+
+
+WH
+```{r}
+confusionMatrix(df_bookies$WH_prog, df_bookies$target, positive = '1')
+```
+
+BbAv
+```{r}
+confusionMatrix(df_bookies$BbAv_prog, df_bookies$target, positive = '1')
+```
+
+IW
+```{r}
+confusionMatrix(df_bookies$IW_prog, df_bookies$target, positive = '1')
+```
+
+
+LB
+```{r}
+confusionMatrix(df_bookies$LB_prog, df_bookies$target, positive = '1')
+```
+
+VC
+```{r}
+confusionMatrix(df_bookies$VC_prog, df_bookies$target, positive = '1')
+```
+
+
+## Pole pod krzywą ROC
+```{r}
+library(ROCR)
+```
+
+Obliczam polę pod krzywą dla każdego z bukmacherów
+
+```{r}
+roc_results <- data.frame(bookie = character(), ROC_AUC = numeric(), stringsAsFactors = F)
+
+for (b in bukmacherzy){
+  pred <- prediction(df_bookies[,paste(b, "H_prob", sep="")], df_bookies$target)
+  perf <- performance(pred, measure = "auc")
+  roc_results[nrow(roc_results) + 1, ] <- c(b, perf@y.values[[1]])
+
+}
+```
+
+
+
+# Sezon po sezonie
+```{r}
+seasons <- unique(df_bookies$Season)
+
+seasons_results <- data.frame(Season = character(), ROC_AUC = numeric(), stringsAsFactors = F)
+
+for (s in seasons){
+  pom <- df_bookies %>% filter(Season == s)
+  pred <- prediction(pom$BbAvH_prob, pom$target)
+  perf <- performance(pred, measure = "auc")
+  seasons_results[nrow(seasons_results) + 1, ] <- c(s, perf@y.values[[1]])
+}
+
+
+```
+
+
+# skuteczność w podziale na ligi
+```{r}
+df_bookies$l_pom <- paste(df_bookies$Country, df_bookies$League, sep = " - ")
+leagues <- unique(df_bookies$l_pom)
+
+leagues_results <- data.frame(League = character(), ROC_AUC = numeric(), stringsAsFactors = F)
+
+for (l in leagues){
+  pom <- df_bookies %>% filter(l_pom == l)
+  pred <- prediction(pom$BbAvH_prob, pom$target)
+  perf <- performance(pred, measure = "auc")
+  leagues_results[nrow(leagues_results) + 1, ] <- list(l, perf@y.values[[1]])
+}
+
+leagues_results <- leagues_results %>% arrange(desc(ROC_AUC))
+```
+
+
+
+
+# skutecznosc w kolejnych meczach
+```{r}
+match_numbers <- unique(df_bookies$h_match_home)
+
+mn_results <- data.frame(Number_of_match = numeric(), ROC_AUC = numeric(), stringsAsFactors = F)
+
+for (m in match_numbers){
+  pom <- df_bookies %>% filter(h_match_home == m)
+  pred <- prediction(pom$BbAvH_prob, pom$target)
+  perf <- performance(pred, measure = "auc")
+  mn_results[nrow(mn_results) + 1, ] <- list(m, perf@y.values[[1]])
+}
+
+```
+
+```{r}
+pom <- mn_results %>% mutate(kolejka  = case_when(Number_of_match < 6 ~ '1. 1-5', Number_of_match < 11 ~ '2. 6-10', Number_of_match < 16 ~ '3.11-15', TRUE ~ '4.15+'))
+```
+
+```{r}
+pom2 <- pom %>% group_by(kolejka) %>% summarize(sr_roc_auc = mean(ROC_AUC))
+```
+

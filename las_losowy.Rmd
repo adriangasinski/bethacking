@@ -1,0 +1,241 @@
+---
+title: "Las losowy i XGBoost"
+output: html_notebook
+---
+
+Libraries
+```{r}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(ROCR)
+library(randomForest)
+library(caret)
+```
+
+
+Load data
+```{r}
+setwd("~/Dysk_Google/datahacking/repos/bethacking")
+load(file="dfm.rdata")
+```
+
+
+
+4-fold validation
+```{r}
+set.seed(2018)
+dfm$fold <- sample(1:4, nrow(dfm), replace=TRUE)
+```
+
+# FE
+```{r}
+dfm2 <- dfm %>% mutate(
+  points_r3_diff = h_points_h_r3 - a_points_a_r3,
+  points_wgh_r3_diff = h_points_wgh_h_h_r3 - a_points_wgh_a_a_r3, 
+  goals_shot_r3_diff = FTHG_h_r3 - FTAG_a_r3,
+  goals_con_r3_diff = FTAG_h_r3 - FTHG_a_r3, 
+  goal_balance_r3_diff = h_goal_balance_h_r3 - a_goal_balance_a_r3,
+  hc_balance_r3_diff = h_c_balance_h_r3 - a_c_balance_a_r3,
+  s_r3_diff = HS_h_r3 - AS_a_r3,
+  s_balance_r3_diff = h_s_balance_h_r3 - a_s_balance_a_r3,
+  st_r3_diff = HST_h_r3 - AS_a_r3,
+  st_balance_r3_diff = h_st_balance_h_r3 - a_st_balance_a_r3,
+  otr_r3_diff = h_on_target_ratio_h_r3 - a_on_target_ratio_a_r3,
+  otr_balance_r3_diff = h_on_target_ratio_balance_h_r3 - a_on_target_ratio_balance_a_r3,
+  gotr_r3_diff = h_goals_st_ratio_h_r3 - a_goals_st_ratio_a_r3,
+  gotr_balance_r3_diff = h_goals_st_ratio_balance_h_r3 - a_goals_st_ratio_balance_a_r3,
+  
+  points_r3_diff_wgh = h_points_wgh_h_h_r3 - a_points_wgh_a_a_r3,
+  points_wgh_r3_diff_wgh = h_points_wgh_h_h_r3 - a_points_wgh_a_a_r3, 
+  goals_shot_r3_diff_wgh = FTHG_wgh_h_h_r3 - FTAG_wgh_a_a_r3,
+  goals_con_r3_diff_wgh = FTAG_wgh_h_h_r3 - FTHG_wgh_a_a_r3, 
+  goal_balance_r3_diff_wgh = h_goal_balance_wgh_h_h_r3 - a_goal_balance_wgh_a_a_r3,
+  hc_balance_r3_diff_wgh = h_c_balance_wgh_h_h_r3 - a_c_balance_wgh_a_a_r3,
+  s_r3_diff = HS_wgh_h_h_r3 - AS_wgh_a_a_r3,
+  s_balance_r3_diff_wgh = h_s_balance_wgh_h_h_r3 - a_s_balance_wgh_a_a_r3,
+  st_r3_diff_wgh = HST_wgh_h_h_r3 - AS_wgh_a_a_r3,
+  st_balance_r3_diff_wgh = h_st_balance_wgh_h_h_r3 - a_st_balance_wgh_a_a_r3,
+  otr_r3_diff_wgh = h_on_target_ratio_wgh_h_h_r3 - a_on_target_ratio_wgh_a_a_r3,
+  otr_balance_r3_diff_wgh = h_on_target_ratio_balance_wgh_h_h_r3 - a_on_target_ratio_balance_wgh_a_a_r3,
+  gotr_r3_diff_wgh = h_goals_st_ratio_wgh_h_h_r3 - a_goals_st_ratio_wgh_a_a_r3,
+  gotr_balance_r3_diff_wgh = h_goals_st_ratio_balance_wgh_h_h_r3 - a_goals_st_ratio_balance_wgh_a_a_r3
+  
+)
+```
+
+
+
+```{r}
+roc_auc_vec_va <- numeric()
+roc_auc_vec_tr <- numeric()
+cm <- list()
+
+for(k in 1:4){
+  tr <- dfm2 %>% filter(fold != k)
+  va <- dfm2 %>% filter(fold == k)
+  
+  set.seed(2018)
+  rfm <- randomForest(as.factor(target) ~ ., tr[,c(18:74, 76:102)], ntree=300, mtry=7, nodesize=150, sampsize=2000, replace=FALSE)
+  
+  prob <- predict(rfm, newdata=tr, type="prob")[,2]
+  pred <- prediction(prob, tr$target)
+  perf <- performance(pred, measure = "auc")
+  perf@y.values[[1]]
+  roc_auc_vec_tr <- c(roc_auc_vec_tr, perf@y.values[[1]])
+  
+  prob <- predict(rfm, newdata=va, type="prob")[,2]
+  pred <- prediction(prob, va$target)
+  perf <- performance(pred, measure = "auc")
+  perf@y.values[[1]]
+  roc_auc_vec_va <- c(roc_auc_vec_va, perf@y.values[[1]])
+ 
+  cm <- c(cm, confusionMatrix(as.numeric(prob>.5), va$target, positive = '1')) 
+}
+```
+
+```{r}
+mean(roc_auc_vec_tr)
+mean(roc_auc_vec_va)
+```
+
+
+
+```{r}
+
+library(xgboost)
+
+d_tr_mtrx <- data.matrix(dfm2[,c(18:73, 76:102)])
+
+
+dtr <- xgb.DMatrix(data =d_tr_mtrx, label = dfm2$target)
+xgb <- xgb.cv(data = dtr, 
+ nrounds = 60,
+ nfold = 5,
+ max_depth = 4,
+ colsample_bytree=1,
+ subsample = 0.6,
+ eta=0.25,
+ objective = "binary:logistic",
+ metrics=list("auc")
+)
+
+```
+
+tuning parameters
+
+```{r}
+library(rBayesianOptimization)
+library(xgboost)
+      
+xgb_cv_bayes <- function(mxdpth, nr, clsmp, sbsmp, et, mnchld){
+  cv <- xgb.cv(data = dtr, 
+  nrounds = nr,
+  nfold = 5,
+  max_depth = mxdpth,
+  colsample_bytree= clsmp,
+  subsample = sbsmp,
+  eta=et,
+  min_child_weight = mnchld,
+  objective = "binary:logistic",
+  metrics=list("auc"), 
+  prediction = TRUE, 
+  verbose = 0)
+  
+  list(Score = max(cv$evaluation_log$test_auc_mean),
+           Pred = cv$pred)
+}
+
+OPT_Res <- BayesianOptimization(xgb_cv_bayes,
+         bounds = list(
+           mxdpth = c(2L, 6L), 
+           nr = c(10L,60L), 
+           clsmp = c(.2, 1), 
+           sbsmp = c(.2,1), 
+           et=c(.02,.5), 
+           mnchld = c(1L,10L)),
+         init_grid_dt = NULL, init_points = 5, n_iter = 20,
+         acq = "ucb", verbose = TRUE)
+
+
+
+
+```
+
+
+
+
+
+Final model 
+Best Parameters Found: 
+Round = 3	mxdpth = 5.0000	nr = 55.0000	clsmp = 0.7530	sbsmp = 0.5661	et = 0.0646	mnchld = 3.0000	Value = 0.6415 
+
+```{r}
+xgb <- xgb.train(data = dtr, 
+  nrounds = 60,
+  nfold = 5,
+  max_depth = 5,
+  colsample_bytree= 0.753,
+  subsample = 0.5661,
+  eta=0.0646,
+  min_child_weight = 3,
+  objective = "binary:logistic",
+  metrics=list("auc"), 
+  prediction = TRUE, 
+  verbose = 1)
+```
+
+Importance plot
+```{r}
+importance <- xgb.importance(model = xgb, feature_names = colnames(dtr))
+
+#head(importance)
+
+xgb.plot.importance(importance_matrix = head(importance,20))
+```
+
+```{r}
+set.seed(13)
+res <- xgb.cv(data = dtr, 
+  nrounds = 60,
+  nfold = 5,
+  max_depth = 5,
+  colsample_bytree= 0.753,
+  subsample = 0.5661,
+  eta=0.0646,
+  min_child_weight = 3,
+  objective = "binary:logistic",
+  metrics=list("auc"), 
+  prediction = TRUE, 
+  verbose = 1)
+```
+
+
+```{r}
+dfm2$xgb_pred <- res$pred
+dfm2$b365_pred <- 1/dfm2$B365H
+```
+
+
+```{r}
+leagues <- unique(dfm2$Div)
+
+l_results <- data.frame(Div = character(), ROC_XGB = numeric(), ROC_B365 = numeric(), stringsAsFactors = F)
+
+for (l in leagues){
+  pom <- dfm2 %>% filter(Div == l)
+  pred <- prediction(pom$xgb_pred, pom$target)
+  perf <- performance(pred, measure = "auc")
+  pred2 <- prediction(pom$b365_pred, pom$target)
+  perf2 <- performance(pred2, measure = "auc")
+  l_results[nrow(l_results) + 1, ] <- c(l, perf@y.values[[1]], perf2@y.values[[1]])
+}
+```
+
+
+```{r}
+cm <-  confusionMatrix(as.numeric(dfm2$xgb_pred>.5), dfm2$target, positive='1') 
+cm
+```
+
+
