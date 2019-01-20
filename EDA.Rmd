@@ -202,12 +202,12 @@ vars_a <- c(
 
 home_team
 ```{r}
-dfm <- dfm %>% mutate_at(.vars=vars(vars_h), .funs=funs(wgh_h = . * real_prob_A))
+dfm <- dfm %>% mutate_at(.vars=vars(vars_h), .funs=funs(wgh = . * real_prob_A))
 ```
 
 away team
 ```{r}
-dfm <- dfm %>% mutate_at(.vars=vars(vars_a), .funs=funs(wgh_a = . * real_prob_H))
+dfm <- dfm %>% mutate_at(.vars=vars(vars_a), .funs=funs(wgh = . * real_prob_H))
 ```
 
 
@@ -231,6 +231,36 @@ dfm <- dfm %>% arrange(Date) %>% group_by(Div, Season, AwayTeam) %>%
   mutate(a_a_matches=rollapply(AwayTeam, width = list(-1:-100), by=1, FUN = function(x){sum(!is.na(x))}, fill = NA, partial=T,align = "right"))
 ```
 
+h_a_matches
+Matches played by home team as an away team
+```{r}
+h_a_matches <- c()
+
+for(i in 1:nrow(dfm)) {
+  r <- dfm[i, ]
+  ind <- dfm$AwayTeam == r$HomeTeam & dfm$Season == r$Season & dfm$Date <r$Date
+  h_a_matches <- c(h_a_matches, sum(ind))
+}
+
+dfm$h_a_matches <- h_a_matches
+h_a_matches <- NULL
+```
+
+
+a_h_matches
+```{r}
+a_h_matches <- c()
+
+for(i in 1:nrow(dfm)) {
+  r <- dfm[i, ]
+  ind <- dfm$HomeTeam == r$AwayTeam & dfm$Season == r$Season & dfm$Date <r$Date
+  a_h_matches <- c(a_h_matches, sum(ind))
+}
+
+dfm$a_h_matches <- a_h_matches
+a_h_matches <- NULL
+```
+
 NA <- 0 
 ```{r}
 dfm$h_h_matches[is.na(dfm$h_h_matches)] <- 0 
@@ -241,8 +271,8 @@ dfm$a_a_matches[is.na(dfm$a_a_matches)] <- 0
 ## Aggregation of match stats
 
 ```{r}
-vars_h_all <- c(vars_h, paste(vars_h, "wgh_h", sep="_"))
-vars_a_all <- c(vars_a, paste(vars_a, "wgh_a", sep="_"))
+vars_h_all <- c(vars_h, paste(vars_h, "wgh", sep="_"))
+vars_a_all <- c(vars_a, paste(vars_a, "wgh", sep="_"))
 ```
 
 
@@ -264,11 +294,129 @@ dfm2 <- dfm %>% arrange(Date) %>%
 ```
 
 
+Aggrefation of HomeTeam playing as AwayTeam
+```{r}
+new_vars <- data.frame(
+  a_points_ha_r3 = numeric(),                      
+  FTAG_ha_r3 = numeric(),                         
+  FTHG_ha_r3 = numeric(),                         
+  a_goal_balance_ha_r3 = numeric(),               
+  AC_ha_r3 = numeric(),
+  a_c_balance_ha_r3 = numeric(),                  
+  AS_ha_r3 = numeric(),                           
+  a_s_balance_ha_r3 = numeric(),                  
+  AST_ha_r3 = numeric(),                          
+  a_st_balance_ha_r3 = numeric(),                 
+  a_on_target_ratio_ha_r3 = numeric(),            
+  a_on_target_ratio_balance_ha_r3 = numeric(),    
+  a_goals_st_ratio_ha_r3 = numeric(),             
+  a_goals_st_ratio_balance_ha_r3 = numeric(),     
+  a_points_wgh_ha_r3 = numeric(),                 
+  FTAG_wgh_ha_r3 = numeric(),                     
+  FTHG_wgh_ha_r3 = numeric(),                     
+  a_goal_balance_wgh_ha_r3 = numeric(),           
+  AC_wgh_ha_r3 = numeric(),                       
+  a_c_balance_wgh_ha_r3 = numeric(),              
+  AS_wgh_ha_r3 = numeric(),                       
+  a_s_balance_wgh_ha_r3 = numeric(),              
+  AST_wgh_ha_r3 = numeric(),                      
+  a_st_balance_wgh_ha_r3 = numeric(),             
+  a_on_target_ratio_wgh_ha_r3 = numeric(),        
+  a_on_target_ratio_balance_wgh_ha_r3 = numeric(),
+  a_goals_st_ratio_wgh_ha_r3 = numeric(),         
+  a_goals_st_ratio_balance_wgh_ha_r3 = numeric()
+)
+
+for(i in 1:nrow(dfm2)){
+  r <- dfm2[i, ]
+  pom <- dfm2[dfm2$AwayTeam == r$HomeTeam & dfm2$Season==r$Season & dfm2$Date < r$Date, ]
+  
+  pom <- pom %>% arrange(desc(Date)) %>% head(3) %>% select(vars_a_all) %>% summarise_all(funs(
+    ha_r3 = mean(., na.rm = T)
+  ))
+  
+  new_vars[i,] <- pom 
+}
+
+dfm2 <- cbind(dfm2, new_vars)
+
+```
+
+
+Aggregation of AwayTeam playing as HomeTeam
+```{r}
+new_vars <- data.frame(
+  h_points_ah_r3 = numeric(),
+  FTHG_ah_r3 = numeric(),
+  FTAG_ah_r3 = numeric(),
+  h_goal_balance_ah_r3 = numeric(),
+  HC_ah_r3 = numeric(),
+  h_c_balance_ah_r3 = numeric(),
+  HS_ah_r3 = numeric(),
+  h_s_balance_ah_r3 = numeric(),
+  HST_ah_r3 = numeric(),
+  h_st_balance_ah_r3 = numeric(),
+  h_on_target_ratio_ah_r3 = numeric(),
+  h_on_target_ratio_balance_ah_r3 = numeric(),
+  h_goals_st_ratio_ah_r3 = numeric(),
+  h_goals_st_ratio_balance_ah_r3 = numeric(),
+  h_points_wgh_ah_r3 = numeric(),
+  FTHG_wgh_ah_r3 = numeric(),
+  FTAG_wgh_ah_r3 = numeric(),
+  h_goal_balance_wgh_ah_r3 = numeric(),
+  HC_wgh_ah_r3 = numeric(),
+  h_c_balance_wgh_ah_r3 = numeric(),
+  HS_wgh_ah_r3 = numeric(),
+  h_s_balance_wgh_ah_r3 = numeric(),
+  HST_wgh_ah_r3 = numeric(),
+  h_st_balance_wgh_ah_r3 = numeric(),
+  h_on_target_ratio_wgh_ah_r3 = numeric(),
+  h_on_target_ratio_balance_wgh_ah_r3 = numeric(),
+  h_goals_st_ratio_wgh_ah_r3 = numeric(),
+  h_goals_st_ratio_balance_wgh_ah_r3 = numeric()
+)
+
+for(i in 1:nrow(dfm2)){
+  r <- dfm2[i, ]
+  pom <- dfm2[dfm2$HomeTeam == r$AwayTeam & dfm2$Season==r$Season & dfm2$Date < r$Date, ]
+  
+  pom <- pom %>% arrange(desc(Date)) %>% head(3) %>% select(vars_h_all) %>% summarise_all(funs(
+    ah_r3 = mean(., na.rm = T)
+  ))
+  
+  new_vars[i,] <- pom 
+}
+
+dfm2 <- cbind(dfm2, new_vars)
+
+```
+
+
+# aggregation with 6 last matches
+```{r}
+dfm2 <- dfm2 %>% arrange(Date) %>% 
+  
+  # Home Team Aggregation
+  group_by(Div, Season, HomeTeam) %>%
+  mutate_at(vars(vars_h_all), funs(
+    h_r6 = rollapply(data=., width = list(-1:-6), by=1, FUN = mean, fill = NA, na.rm = T, partial=T, align = "right")
+    )) %>% ungroup() %>%
+  
+  # Away Team Aggrefation
+  arrange(Date) %>%
+  group_by(Div, Season, AwayTeam) %>%
+  mutate_at(vars(vars_a_all), funs(
+    a_r6 = rollapply(data=., width = list(-1:-6), by=1, FUN = mean, fill = NA, na.rm = T, partial=T, align = "right")
+    )) %>% ungroup()
+```
+
+
+
 
 simple check
 
 ```{r}
-pom <- dfm2 %>% filter(HomeTeam == "Arsenal") %>% arrange(Date) %>% select(Div, Date,h_h_matches, HomeTeam, AwayTeam, FTHG, FTAG, h_points, h_points_h_r3)
+pom <- dfm2 %>% filter(HomeTeam == "Arsenal" | AwayTeam == "Arsenal") %>% arrange(Date) %>% select(Div, Date,h_h_matches, HomeTeam, AwayTeam, FTHG, FTAG, h_points, h_points_h_r3, h_points_h_r6, h_points_ah_r3, a_points_ha_r3)
 ```
 
 
@@ -278,6 +426,7 @@ Save df to file
 dfm <- dfm2
 rm(dfm2)
 rm(pom)
+rm(new_vars)
 ```
 
 ```{r}

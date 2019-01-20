@@ -6,3 +6,4 @@ pomoce/*
 *.html
 *.sqlite
 eda/*
+.Rproj.user
