@@ -1,0 +1,137 @@
+---
+title: "XGBoost - new variables."
+output: html_document
+---
+
+Lilbraries
+```{r}
+library(dplyr)
+library(xgboost)
+library(ROCR)
+library(caret)
+library(rBayesianOptimization)
+```
+
+
+Load data
+```{r}
+setwd("~/Dysk_Google/datahacking/repos/bethacking")
+load(file="dfm.rdata")
+```
+
+
+Filter out observations without required number of matches
+```{r}
+dfm2 <- dfm %>% filter(h_h_matches > 5 & a_a_matches > 5)
+```
+
+Filterout observations with NAs
+```{r}
+dfm3 <- dfm2[complete.cases(dfm2[,c(42, 100, 152:323)]),]
+```
+
+
+
+xgboost on last set of parameters
+```{r}
+d_tr_mtrx <- data.matrix(dfm3[,c(42, 152:323)])
+
+
+dtr <- xgb.DMatrix(data =d_tr_mtrx, label = dfm3$target)
+xgb <- xgb.cv(data = dtr, 
+ nrounds = 100,
+ nfold = 5,
+ max_depth = 3,
+ colsample_bytree=1,
+ subsample = 0.6,
+ eta=0.05,
+ objective = "binary:logistic",
+ metrics=list("auc")
+)
+```
+
+Searching for best parameters 
+```{r}
+xgb_cv_bayes <- function(mxdpth, nr, clsmp, sbsmp, et, mnchld){
+  cv <- xgb.cv(data = dtr, 
+  nrounds = nr,
+  nfold = 5,
+  max_depth = mxdpth,
+  colsample_bytree= clsmp,
+  subsample = sbsmp,
+  eta=et,
+  min_child_weight = mnchld,
+  objective = "binary:logistic",
+  metrics=list("auc"), 
+  prediction = TRUE, 
+  verbose = 0)
+  
+  list(Score = max(cv$evaluation_log$test_auc_mean),
+           Pred = cv$pred)
+}
+
+OPT_Res <- BayesianOptimization(xgb_cv_bayes,
+         bounds = list(
+           mxdpth = c(2L, 10L), 
+           nr = c(90L,200L), 
+           clsmp = c(.2, 1), 
+           sbsmp = c(.2,1), 
+           et=c(.01,.5), 
+           mnchld = c(1L,10L)),
+         init_grid_dt = NULL, init_points = 10, n_iter = 50,
+         acq = "ucb", verbose = TRUE)
+
+```
+
+
+
+elapsed = 38.29	Round = 9	mxdpth = 2.0000	nr = 187.0000	clsmp = 0.7185	sbsmp = 0.2321	et = 0.0410	mnchld = 5.0000	Value = 0.6526 
+
+
+
+elapsed = 117.01	Round = 33	mxdpth = 7.0000	nr = 140.0000	clsmp = 1.0000	sbsmp = 0.2000	et = 0.0100	mnchld = 2.0000	Value = 0.6548
+
+elapsed = 258.18	Round = 32	mxdpth = 10.0000	nr = 200.0000	clsmp = 1.0000	sbsmp = 0.2000	et = 0.0100	mnchld = 7.0000	Value = 0.6538 
+
+
+```{r}
+dtr <- xgb.DMatrix(data =d_tr_mtrx, label = dfm3$target)
+xgb_model <- xgb.train(data = dtr, 
+  nrounds = 140,
+  nfold = 5,
+  max_depth = 7,
+  colsample_bytree= 1,
+  subsample = .2,
+  eta=.01,
+  min_child_weight = 7,
+  objective = "binary:logistic",
+  metrics=list("auc")
+)
+
+xgb_cv <- xgb.cv(data = dtr, 
+  nrounds = 140,
+  nfold = 5,
+  max_depth = 7,
+  colsample_bytree= 1,
+  subsample = .2,
+  eta=.01,
+  min_child_weight = 7,
+  objective = "binary:logistic",
+  metrics=list("auc"), 
+  prediction=TRUE
+)
+```
+
+
+```{r}
+dfm3$xgb_pred <- xgb_cv$pred
+```
+
+
+export to file
+```{r}
+dfm <- dfm3
+save(dfm, file = "dfm_xgb.rdata")
+save(xgb_model, file = "xgb_model.rdata")
+```
+
